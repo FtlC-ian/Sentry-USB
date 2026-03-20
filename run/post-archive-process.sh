@@ -224,6 +224,30 @@ if [ -x /root/bin/send-push-message ]; then
   fi
 fi
 
+# Post-archive webhook: notify an external service that archiving is complete.
+# Useful for fleet management, home automation, or sentry mode control.
+# Set POST_ARCHIVE_WEBHOOK_URL in config to enable. Optional bearer token auth
+# via POST_ARCHIVE_WEBHOOK_TOKEN.
+if [ -n "${POST_ARCHIVE_WEBHOOK_URL:-}" ]; then
+  log "Sending post-archive webhook..."
+  WEBHOOK_HEADERS=(-H "Content-Type: application/json")
+  if [ -n "${POST_ARCHIVE_WEBHOOK_TOKEN:-}" ]; then
+    WEBHOOK_HEADERS+=(-H "Authorization: Bearer ${POST_ARCHIVE_WEBHOOK_TOKEN}")
+  fi
+  WEBHOOK_HTTP=$(curl -sf -o /tmp/post_archive_webhook_resp.json -w "%{http_code}" \
+    -X POST \
+    "${WEBHOOK_HEADERS[@]}" \
+    -d "{\"event\":\"archive_complete\",\"timestamp\":\"$(date -u +%FT%TZ)\",\"hostname\":\"$(hostname)\"}" \
+    --connect-timeout 10 \
+    --max-time 30 \
+    "${POST_ARCHIVE_WEBHOOK_URL}" 2>/dev/null) || true
+  if [ "$WEBHOOK_HTTP" = "200" ]; then
+    log "Post-archive webhook successful."
+  else
+    log "Post-archive webhook failed (HTTP ${WEBHOOK_HTTP:-timeout}): $(cat /tmp/post_archive_webhook_resp.json 2>/dev/null)"
+  fi
+fi
+
 # Check for updates automatically (if not disabled)
 AUTO_UPDATE_CHECK=$(curl -sf "${API_URL}/api/config/preference?key=auto_update_check" 2>/dev/null | grep -o '"value":"[^"]*"' | cut -d'"' -f4)
 if [ "$AUTO_UPDATE_CHECK" != "disabled" ]; then
