@@ -18,6 +18,8 @@ import {
   Search,
   ArrowUpDown,
   Check,
+  Volume2,
+  HardDrive,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -44,11 +46,13 @@ interface FileEntry {
 interface DriveTab {
   id: string
   base: string
-  icon: "cam" | "media" | "wrap" | "plate"
+  icon: "cam" | "media" | "wrap" | "plate" | "lock" | "drive"
 }
 
 const ALL_DRIVES: DriveTab[] = [
+  { id: "USB Drive", base: "/mutable", icon: "drive" },
   { id: "TeslaCam", base: "/mutable/TeslaCam", icon: "cam" },
+  { id: "Lock Sounds", base: "/mutable/LockChime", icon: "lock" },
   { id: "Wraps", base: "/mutable/Wraps", icon: "wrap" },
   { id: "License Plates", base: "/mutable/LicensePlate", icon: "plate" },
   { id: "Music", base: "/var/www/html/fs/Music", icon: "media" },
@@ -61,6 +65,8 @@ const TAB_ICONS: Record<DriveTab["icon"], React.ComponentType<{ className?: stri
   media: Music,
   wrap: Paintbrush,
   plate: RectangleHorizontal,
+  lock: Volume2,
+  drive: HardDrive,
 }
 
 function formatSize(bytes: number): string {
@@ -103,11 +109,14 @@ export default function Files() {
         const res = await fetch("/api/config")
         const cfg = await res.json()
         const visible: DriveTab[] = []
+        // Always show USB Drive root (shows LockChime.wav, TeslaCam, etc.)
+        visible.push(ALL_DRIVES.find(d => d.id === "USB Drive")!)
         // Show TeslaCam tab if cam is configured
         if (cfg.has_cam === "yes") {
           visible.push(ALL_DRIVES.find(d => d.id === "TeslaCam")!)
         }
-        // Always show Wraps and License Plates (they're user-uploadable)
+        // Always show Lock Sounds, Wraps and License Plates (they're user-uploadable)
+        visible.push(ALL_DRIVES.find(d => d.id === "Lock Sounds")!)
         visible.push(ALL_DRIVES.find(d => d.id === "Wraps")!)
         visible.push(ALL_DRIVES.find(d => d.id === "License Plates")!)
         if (cfg.has_music === "yes") visible.push(ALL_DRIVES.find(d => d.id === "Music")!)
@@ -588,7 +597,23 @@ export default function Files() {
                       }
                     }}
                   >
-                    <td className="px-3 py-3">
+                    <td className="w-8 px-2 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(f.path)}
+                        onChange={() => {
+                          setSelected((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(f.path)) next.delete(f.path)
+                            else next.add(f.path)
+                            return next
+                          })
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-3.5 w-3.5 cursor-pointer rounded border-slate-600 accent-blue-500"
+                      />
+                    </td>
+                    <td className="px-1 py-3">
                       {f.is_dir ? (
                         <Folder className="h-4 w-4 text-blue-400" />
                       ) : (

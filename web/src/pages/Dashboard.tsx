@@ -153,7 +153,16 @@ export default function Dashboard() {
         if (!mounted) return
         setDriveStats(stats)
         setProcessing(driveStatus.running)
-        if (!driveStatus.running) setProcessProgress(null)
+        if (!driveStatus.running) {
+          setProcessProgress(null)
+        } else if (driveStatus.process_total != null && driveStatus.process_total > 0) {
+          // Pick up processing progress from polling so the UI updates
+          // even if the WebSocket missed messages during the transition.
+          setProcessProgress({
+            current: driveStatus.process_current ?? 0,
+            total: driveStatus.process_total,
+          })
+        }
 
         if (driveStatus.phase === "archiving" && driveStatus.total != null) {
           setArchiveProgress({
@@ -407,75 +416,8 @@ export default function Dashboard() {
           }
           color={status.drives_active === "yes" ? "emerald" : "amber"}
         />
-      </div>
 
-      {/* Storage bar */}
-      <div className="glass-card p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-sm font-medium text-slate-300">
-            Storage Usage
-          </span>
-          <span className="text-xs text-slate-500">
-            {formatBytes(freeSpace)} free of {formatBytes(totalSpace)}
-          </span>
-        </div>
-        {storageBreakdown && storageBreakdown.total_space > 0 ? (() => {
-          const segments = [
-            { label: "Dashcam", size: storageBreakdown.cam_size, color: "#3b82f6" },
-            { label: "Music", size: storageBreakdown.music_size, color: "#a855f7" },
-            { label: "Lightshow", size: storageBreakdown.lightshow_size, color: "#f59e0b" },
-            { label: "Boombox", size: storageBreakdown.boombox_size, color: "#ec4899" },
-            { label: "Wraps", size: storageBreakdown.wraps_size, color: "#14b8a6" },
-            { label: "Snapshots", size: storageBreakdown.snapshots_size, color: "#6366f1" },
-          ].filter(s => s.size > 0)
-          const total = storageBreakdown.total_space
-          return (
-            <>
-              <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800 flex">
-                {segments.map((s) => (
-                  <div
-                    key={s.label}
-                    className="h-full transition-all duration-500 first:rounded-l-full last:rounded-r-full"
-                    style={{
-                      width: `${Math.max((s.size / total) * 100, 0.5)}%`,
-                      backgroundColor: s.color,
-                    }}
-                    title={`${s.label}: ${formatBytes(s.size)}`}
-                  />
-                ))}
-              </div>
-              <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
-                {segments.map((s) => (
-                  <div key={s.label} className="flex items-center gap-1.5 text-xs">
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: s.color }}
-                    />
-                    <span className="text-slate-400">{s.label}</span>
-                    <span className="font-medium text-slate-300">{formatBytes(s.size)}</span>
-                  </div>
-                ))}
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="inline-block h-2 w-2 rounded-full bg-slate-700" />
-                  <span className="text-slate-400">Free</span>
-                  <span className="font-medium text-slate-300">{formatBytes(storageBreakdown.free_space)}</span>
-                </div>
-              </div>
-            </>
-          )
-        })() : (
-          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-500"
-              style={{ width: `${usedPercent}%` }}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Keep-Awake card — z-20 so the duration dropdown paints above the archive card */}
-      <div className="relative z-20">
-        <KeepAwakeCard />
+        <KeepAwakeTile />
       </div>
 
       {/* Archive progress */}
@@ -488,9 +430,9 @@ export default function Dashboard() {
             </span>
           </div>
           {active && (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-              {archiveProgress ? "Archiving" : "Processing"}
+            <span className={`flex items-center gap-1.5 text-xs ${archiveProgress ? "text-emerald-400" : "text-blue-400"}`}>
+              <span className={`inline-block h-1.5 w-1.5 animate-pulse rounded-full ${archiveProgress ? "bg-emerald-400" : "bg-blue-400"}`} />
+              {archiveProgress ? "Archiving" : "Processing Drives"}
             </span>
           )}
         </div>
@@ -565,11 +507,11 @@ export default function Dashboard() {
               <>
                 <div className="mb-1.5 flex items-center justify-between text-xs text-slate-500">
                   <span>
-                    Processing: {processProgress.current.toLocaleString()} /{" "}
+                    Processing Drives: {processProgress.current.toLocaleString()} /{" "}
                     {processProgress.total.toLocaleString()} files
                     {(() => {
                       const eta = computeETA(processProgress.current, processProgress.total, processHistoryRef.current)
-                      return eta ? <span className="ml-2 text-emerald-400/70">{eta} left</span> : null
+                      return eta ? <span className="ml-2 text-blue-400/70">{eta} left</span> : null
                     })()}
                   </span>
                   <span>
@@ -581,14 +523,23 @@ export default function Dashboard() {
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
+                    className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-500"
                     style={{
                       width: `${(processProgress.current / processProgress.total) * 100}%`,
                     }}
                   />
                 </div>
               </>
-            ) : active ? (
+            ) : processing ? (
+              <>
+                <div className="mb-1.5 flex items-center justify-between text-xs text-slate-500">
+                  <span>Processing Drives...</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                  <div className="h-full w-2/5 animate-pulse rounded-full bg-gradient-to-r from-blue-500 to-blue-400" />
+                </div>
+              </>
+            ) : archiveProgress ? (
               <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
                 <div className="h-full w-2/5 animate-pulse rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400" />
               </div>
@@ -610,89 +561,166 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Storage bar */}
+      <div className="glass-card p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-slate-300">
+            Storage Usage
+          </span>
+          <span className="text-xs text-slate-500">
+            {formatBytes(freeSpace)} free of {formatBytes(totalSpace)}
+          </span>
+        </div>
+        {storageBreakdown && storageBreakdown.total_space > 0 ? (() => {
+          const segments = [
+            { label: "Dashcam", size: storageBreakdown.cam_size, color: "#3b82f6" },
+            { label: "Music", size: storageBreakdown.music_size, color: "#a855f7" },
+            { label: "Lightshow", size: storageBreakdown.lightshow_size, color: "#f59e0b" },
+            { label: "Boombox", size: storageBreakdown.boombox_size, color: "#ec4899" },
+            { label: "Wraps", size: storageBreakdown.wraps_size, color: "#14b8a6" },
+            { label: "Snapshots", size: storageBreakdown.snapshots_size, color: "#6366f1" },
+          ].filter(s => s.size > 0)
+          const total = storageBreakdown.total_space
+          return (
+            <>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800 flex">
+                {segments.map((s) => (
+                  <div
+                    key={s.label}
+                    className="h-full transition-all duration-500 first:rounded-l-full last:rounded-r-full"
+                    style={{
+                      width: `${Math.max((s.size / total) * 100, 0.5)}%`,
+                      backgroundColor: s.color,
+                    }}
+                    title={`${s.label}: ${formatBytes(s.size)}`}
+                  />
+                ))}
+              </div>
+              <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
+                {segments.map((s) => (
+                  <div key={s.label} className="flex items-center gap-1.5 text-xs">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: s.color }}
+                    />
+                    <span className="text-slate-400">{s.label}</span>
+                    <span className="font-medium text-slate-300">{formatBytes(s.size)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="inline-block h-2 w-2 rounded-full bg-slate-700" />
+                  <span className="text-slate-400">Free</span>
+                  <span className="font-medium text-slate-300">{formatBytes(storageBreakdown.free_space)}</span>
+                </div>
+              </div>
+            </>
+          )
+        })() : (
+          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-500"
+              style={{ width: `${usedPercent}%` }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 const DURATION_OPTIONS = [
-  { label: "15 min", value: 15 },
-  { label: "30 min", value: 30 },
-  { label: "1 hour", value: 60 },
-  { label: "2 hours", value: 120 },
+  { label: "15m", value: 15 },
+  { label: "30m", value: 30 },
+  { label: "1h", value: 60 },
+  { label: "2h", value: 120 },
 ]
 
-function KeepAwakeCard() {
+function KeepAwakeTile() {
   const { status, mode, start, stop } = useKeepAwake()
   const [showDurations, setShowDurations] = useState(false)
 
-  // Don't show the card if user hasn't configured a mode
   if (!mode) return null
 
   const isActive = status.state === "active"
   const isPending = status.state === "pending"
   const isIdle = status.state === "idle"
-
   const remainingMin = status.remaining_sec ? Math.ceil(status.remaining_sec / 60) : 0
 
+  const color = isActive ? "red" : isPending ? "amber" : "blue"
+  const colorMap = {
+    blue: "text-blue-400 bg-blue-500/15",
+    amber: "text-amber-400 bg-amber-500/15",
+    red: "text-rose-400 bg-rose-500/15",
+  }
+
+  const value = isActive
+    ? `${remainingMin}m`
+    : isPending
+      ? "Pending"
+      : mode === "auto"
+        ? "Auto"
+        : "Idle"
+
+  const sub = isActive
+    ? "Keeping car awake"
+    : isPending
+      ? "Waiting for archive..."
+      : mode === "auto"
+        ? "Activates on interaction"
+        : "Tap to start"
+
   return (
-    <div className="glass-card p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+    <div className="glass-card relative p-4">
+      <div className="flex items-start gap-3">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${colorMap[color]}`}>
           {isActive ? (
-            <HeartPulse className="h-4 w-4 animate-pulse text-rose-400" />
+            <HeartPulse className="h-5 w-5 animate-pulse" />
           ) : isPending ? (
-            <Timer className="h-4 w-4 animate-pulse text-amber-400" />
+            <Timer className="h-5 w-5 animate-pulse" />
           ) : (
-            <HeartPulse className="h-4 w-4 text-slate-600" />
-          )}
-          <span className="text-sm font-medium text-slate-300">Keep Awake</span>
-          {isActive && (
-            <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-400">
-              {remainingMin}m remaining
-            </span>
-          )}
-          {isPending && (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
-              Waiting for archive...
-            </span>
+            <HeartPulse className="h-5 w-5" />
           )}
         </div>
-
-        <div className="flex items-center gap-2">
-          {mode === "manual" && isIdle && (
-            <div className="relative">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            Keep Awake
+          </p>
+          <div className="mt-1 flex items-center gap-2">
+            <p className="text-lg font-semibold text-slate-100">{value}</p>
+            {mode === "manual" && isIdle && (
+              <div className="relative ml-auto">
+                <button
+                  onClick={() => setShowDurations(!showDurations)}
+                  className="rounded-lg bg-blue-500/20 px-2.5 py-1 text-[11px] font-medium text-blue-400 transition-colors hover:bg-blue-500/30"
+                >
+                  Start
+                </button>
+                {showDurations && (
+                  <div className="absolute right-0 top-full z-10 mt-1 w-28 rounded-lg border border-white/10 bg-slate-900 p-1 shadow-xl">
+                    {DURATION_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => { start(opt.value); setShowDurations(false) }}
+                        className="w-full rounded-md px-3 py-1.5 text-left text-xs text-slate-300 hover:bg-white/5"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {(isActive || isPending) && (
               <button
-                onClick={() => setShowDurations(!showDurations)}
-                className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-medium text-blue-400 transition-colors hover:bg-blue-500/30"
+                onClick={stop}
+                className="ml-auto rounded-lg bg-red-500/15 px-2.5 py-1 text-[11px] font-medium text-red-400 transition-colors hover:bg-red-500/25"
               >
-                Keep Awake
+                Stop
               </button>
-              {showDurations && (
-                <div className="absolute right-0 top-full z-10 mt-1 w-32 rounded-lg border border-white/10 bg-slate-900 p-1 shadow-xl">
-                  {DURATION_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => { start(opt.value); setShowDurations(false) }}
-                      className="w-full rounded-md px-3 py-1.5 text-left text-xs text-slate-300 hover:bg-white/5"
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {mode === "auto" && isIdle && (
-            <span className="text-xs text-slate-600">Auto — interact to activate</span>
-          )}
-          {(isActive || isPending) && (
-            <button
-              onClick={stop}
-              className="rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/25"
-            >
-              Stop
-            </button>
-          )}
+            )}
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">{sub}</p>
         </div>
       </div>
     </div>

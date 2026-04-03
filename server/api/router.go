@@ -9,8 +9,11 @@ import (
 )
 
 func RegisterRoutes(mux *http.ServeMux, hub *ws.Hub) {
-	// Ensure Wraps and LicensePlate folders exist on startup
+	// Ensure Wraps, LicensePlate, and LockChime folders exist on startup
 	ensureMediaFolders()
+
+	// Start lock chime scheduled randomization (background goroutine)
+	StartLockChimeScheduler()
 
 	h := &handlers{hub: hub}
 
@@ -85,7 +88,16 @@ func RegisterRoutes(mux *http.ServeMux, hub *ws.Hub) {
 	mux.HandleFunc("DELETE /api/notifications/paired-devices/{id}", h.removeNotificationPairedDevice)
 	mux.HandleFunc("POST /api/notifications/test", h.sendTestNotification)
 
-	// Support chat (proxy to api.sentry-six.com)
+	// Notification center (history + type settings)
+	mux.HandleFunc("GET /api/notifications/settings", h.getNotificationSettings)
+	mux.HandleFunc("PUT /api/notifications/settings", h.updateNotificationSettings)
+	mux.HandleFunc("GET /api/notifications/history", h.getNotificationHistory)
+	mux.HandleFunc("POST /api/notifications/history", h.appendNotificationHistory)
+	mux.HandleFunc("DELETE /api/notifications/history", h.clearNotificationHistory)
+	mux.HandleFunc("DELETE /api/notifications/history/{id}", h.deleteNotificationHistoryItem)
+	mux.HandleFunc("GET /api/notifications/settings/check", h.checkNotificationType)
+
+	// Support chat (proxy to backend API)
 	mux.HandleFunc("GET /api/support/check", h.checkSupportAvailable)
 	mux.HandleFunc("POST /api/support/ticket", h.createSupportTicket)
 	mux.HandleFunc("POST /api/support/ticket/{id}/message", h.sendSupportMessage)
@@ -96,7 +108,26 @@ func RegisterRoutes(mux *http.ServeMux, hub *ws.Hub) {
 	mux.HandleFunc("POST /api/support/ticket/{id}/register-device", h.registerSupportDevice)
 	mux.HandleFunc("POST /api/support/ticket/{id}/unregister-device", h.unregisterSupportDevice)
 
-	// Community wraps (proxy to api.sentry-six.com)
+	// Lock Chime (local library of .wav lock sounds)
+	mux.HandleFunc("GET /api/lockchime/list", h.lockChimeList)
+	mux.HandleFunc("POST /api/lockchime/upload", h.lockChimeUpload)
+	mux.HandleFunc("POST /api/lockchime/activate/{filename}", h.lockChimeActivate)
+	mux.HandleFunc("POST /api/lockchime/clear-active", h.lockChimeClear)
+	mux.HandleFunc("DELETE /api/lockchime/{filename}", h.lockChimeDelete)
+	mux.HandleFunc("GET /api/lockchime/random-config", h.lockChimeGetRandomConfig)
+	mux.HandleFunc("PUT /api/lockchime/random-config", h.lockChimeSaveRandomConfig)
+	mux.HandleFunc("POST /api/lockchime/randomize", h.lockChimeRandomize)
+
+	// Community lock chimes (proxy to support server)
+	mux.HandleFunc("GET /api/lockchime/community/library", h.communityLockChimeLibrary)
+	mux.HandleFunc("GET /api/lockchime/community/stream/{code}", h.communityLockChimeStream)
+	mux.HandleFunc("POST /api/lockchime/community/upload", h.communityLockChimeUpload)
+	mux.HandleFunc("POST /api/lockchime/community/download/{code}", h.communityLockChimeDownload)
+	mux.HandleFunc("POST /api/lockchime/community/admin/validate", h.communityLockChimeAdminValidate)
+	mux.HandleFunc("PUT /api/lockchime/community/admin/edit/{code}", h.communityLockChimeAdminEdit)
+	mux.HandleFunc("DELETE /api/lockchime/community/admin/delete/{code}", h.communityLockChimeAdminDelete)
+
+	// Community wraps (proxy to backend API)
 	mux.HandleFunc("GET /api/wraps/library", h.communityWrapsLibrary)
 	mux.HandleFunc("GET /api/wraps/thumbnail/{code}", h.communityWrapsThumbnail)
 	mux.HandleFunc("POST /api/wraps/upload", h.communityWrapsUpload)
@@ -104,6 +135,12 @@ func RegisterRoutes(mux *http.ServeMux, hub *ws.Hub) {
 	mux.HandleFunc("POST /api/wraps/admin/validate", h.communityWrapsAdminValidate)
 	mux.HandleFunc("PUT /api/wraps/admin/edit/{code}", h.communityWrapsAdminEdit)
 	mux.HandleFunc("DELETE /api/wraps/admin/delete/{code}", h.communityWrapsAdminDelete)
+
+	// Config backup & restore
+	mux.HandleFunc("POST /api/system/backup", h.createBackup)
+	mux.HandleFunc("GET /api/system/backups", h.listBackups)
+	mux.HandleFunc("GET /api/system/backup/{date}", h.getBackup)
+	mux.HandleFunc("POST /api/system/restore", h.restoreBackup)
 
 	// Authentication
 	mux.HandleFunc("POST /api/auth/login", h.login)

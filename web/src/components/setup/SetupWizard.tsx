@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { ChevronLeft, ChevronRight, Check, Loader2, AlertCircle, AlertTriangle, CheckCircle } from "lucide-react"
+import { ChevronLeft, ChevronRight, Check, Loader2, AlertCircle, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SetupProgress } from "./SetupProgress"
 import { WelcomeStep } from "./steps/WelcomeStep"
@@ -224,6 +224,8 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
   // Snapshot of the config as it was when the wizard opened (for detecting destructive changes)
   const originalDataRef = useRef<SetupFormData | undefined>(initialData)
   const [destructiveWarning, setDestructiveWarning] = useState<DestructiveChange[] | null>(null)
+  // Tracks whether the user restored from a backup (affects warning dialog wording)
+  const isRestoreFlow = useRef(false)
 
   const handleChange = useCallback((key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }))
@@ -231,6 +233,15 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
 
   const handleBatchChange = useCallback((updates: Record<string, string>) => {
     setFormData((prev) => ({ ...prev, ...updates }))
+    // When restoring from a backup, update the baseline so destructive change
+    // detection compares against the backup values (not the fresh SD card defaults).
+    // The WelcomeStep sets _restore_baseline when a backup restore completes.
+    if (updates._restore_baseline === "true") {
+      const baseline = { ...updates }
+      delete baseline._restore_baseline
+      originalDataRef.current = { ...(originalDataRef.current ?? {}), ...baseline }
+      isRestoreFlow.current = true
+    }
   }, [])
 
   // Poll setup status while running
@@ -378,6 +389,15 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
       })
       if (!res.ok) throw new Error("Failed to save configuration")
 
+      // Save backup location preference (stored separately from config)
+      if (dataToSave._BACKUP_LOCATION) {
+        await fetch("/api/config/preference", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: "backup_location", value: dataToSave._BACKUP_LOCATION }),
+        }).catch(() => {}) // best-effort
+      }
+
       setPhase("applying")
       setSetupMessage("Configuration saved. Starting setup...")
 
@@ -451,11 +471,12 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-100">
-                Data Will Be Deleted
+                {isRestoreFlow.current ? "Drive Sizes Changed From Backup" : "Data Will Be Deleted"}
               </h2>
               <p className="mt-1 text-sm text-slate-400">
-                The following changes require drive images to be recreated.
-                All data on the affected drives will be permanently lost.
+                {isRestoreFlow.current
+                  ? "You changed drive sizes from what was in your backup. This will cause the SSD to be reformatted, which will erase all existing footage and data on the affected drives."
+                  : "The following changes require drive images to be recreated. All data on the affected drives will be permanently lost."}
               </p>
             </div>
           </div>
@@ -482,13 +503,13 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
               onClick={handleSkipDestructive}
               className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
             >
-              Skip Data-Affecting Changes
+              {isRestoreFlow.current ? "Restore Backup Sizes" : "Skip Data-Affecting Changes"}
             </button>
             <button
               onClick={handleApplyAll}
               className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
             >
-              Delete Data & Apply All
+              {isRestoreFlow.current ? "Continue & Reformat" : "Delete Data & Apply All"}
             </button>
           </div>
         </div>
@@ -498,71 +519,68 @@ export function SetupWizard({ initialData, onClose }: SetupWizardProps) {
 
   // ── Progress screen (shown after Apply) ──
   if (phase !== "wizard") {
+    const isInProgress = phase === "applying" || phase === "running" || phase === "rebooting" || phase === "finalizing"
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <div className="glass-card flex w-full max-w-lg flex-col items-center gap-6 p-10 text-center">
-          {phase === "applying" || phase === "running" || phase === "rebooting" || phase === "finalizing" ? (
+        <div className="glass-card flex w-full max-w-2xl flex-col gap-6 p-8">
+          {isInProgress ? (
             <>
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-500/20">
-                <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
-              </div>
-              <div>
+              <div className="text-center">
                 <h2 className="text-xl font-semibold text-slate-100">
                   {phase === "finalizing" ? "Almost Done!" : "Setting Up Sentry USB"}
                 </h2>
                 <p className="mt-2 text-sm text-slate-400">{setupMessage}</p>
                 {phase !== "finalizing" && (
-                  <p className="mt-4 text-xs text-slate-600">
-                    This process creates disk images, configures archiving, and sets up USB gadget mode.
-                    The device will reboot multiple times — this is completely normal.
-                    Setup continues automatically after each reboot. Do not power off the device.
-                    The full process may take 10-20 minutes.
+                  <p className="mt-2 text-xs text-slate-600">
+                    The device will reboot multiple times — this is normal. Do not power off.
                   </p>
                 )}
                 {phase === "finalizing" && (
-                  <p className="mt-4 text-xs text-slate-600">
-                    Sentry USB is performing its final reboot. This page will automatically
-                    redirect you to the dashboard once the device is back online.
+                  <p className="mt-2 text-xs text-slate-600">
+                    Performing final reboot. This page will redirect automatically.
                   </p>
                 )}
               </div>
-              <SetupProgress />
+              <SetupProgress phase={phase} />
             </>
           ) : phase === "complete" ? (
             <>
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20">
-                <CheckCircle className="h-8 w-8 text-emerald-400" />
-              </div>
-              <div>
-                <h2 className="text-xl font-semibold text-slate-100">Setup Complete!</h2>
+              <div className="text-center">
+                <h2 className="text-xl font-semibold text-slate-100">
+                  Setup Complete!
+                </h2>
                 <p className="mt-2 text-sm text-slate-400">{setupMessage}</p>
               </div>
-              <button
-                onClick={onClose}
-                className="rounded-lg bg-blue-500 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600"
-              >
-                Go to Dashboard
-              </button>
+              <SetupProgress complete phase="complete" />
+              <div className="flex justify-center">
+                <button
+                  onClick={onClose}
+                  className="rounded-xl bg-blue-500 px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600"
+                >
+                  Go to Dashboard
+                </button>
+              </div>
             </>
           ) : (
             <>
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-500/20">
-                <AlertCircle className="h-8 w-8 text-red-400" />
-              </div>
-              <div>
+              <div className="text-center">
+                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-red-500/20">
+                  <AlertCircle className="h-7 w-7 text-red-400" />
+                </div>
                 <h2 className="text-xl font-semibold text-slate-100">Setup Error</h2>
                 <p className="mt-2 text-sm text-red-400">{setupMessage}</p>
               </div>
-              <div className="flex gap-3">
+              <SetupProgress phase="error" />
+              <div className="flex justify-center gap-3">
                 <button
                   onClick={() => { setPhase("wizard"); setCurrentStep(steps.length - 1) }}
-                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-white/10"
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/10"
                 >
                   Back to Wizard
                 </button>
                 <button
                   onClick={handleApply}
-                  className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
+                  className="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-600"
                 >
                   Retry
                 </button>

@@ -124,14 +124,27 @@ function dehumanize () {
 
 REBOOT=false
 
-# wpa_supplicant should have a country code. Use US as the default
+# Ensure a WiFi regulatory country code is set. Use US as the default
 # to avoid using the disallowed channels in the US.
-WPA=/etc/wpa_supplicant/wpa_supplicant.conf
-if [ -e "$WPA" ] && ! grep -q "country=" $WPA && grep -q "network=" $WPA
+if systemctl -q is-enabled NetworkManager.service 2>/dev/null
 then
-  setup_progress "adding country code to wpa_supplicant.conf"
-  echo "country=US" >> $WPA
-  REBOOT=true
+  # Bookworm+ uses NetworkManager — set regulatory domain via iw
+  CURRENT_REG=$(iw reg get 2>/dev/null | grep -oP '(?<=country )\w+' | head -1)
+  if [ -z "$CURRENT_REG" ] || [ "$CURRENT_REG" = "00" ]
+  then
+    setup_progress "setting WiFi regulatory domain to US via iw"
+    iw reg set US
+    REBOOT=true
+  fi
+else
+  # Legacy (pre-Bookworm): set country in wpa_supplicant.conf
+  WPA=/etc/wpa_supplicant/wpa_supplicant.conf
+  if [ -e "$WPA" ] && ! grep -q "country=" $WPA && grep -q "network=" $WPA
+  then
+    setup_progress "adding country code to wpa_supplicant.conf"
+    echo "country=US" >> $WPA
+    REBOOT=true
+  fi
 fi
 
 BOOT_DISK=$(lsblk -dpno pkname "$(findmnt -D -no SOURCE --target /sentryusb)")
@@ -1459,20 +1472,87 @@ done
 # Update config.txt if needed
 # Pi 3 needs dr_mode=peripheral to ensure the DWC2 controller operates in
 # gadget/peripheral mode rather than defaulting to host mode.
+# Pi 4 and Pi 5 need the overlay under their model-specific [piN] section
+# because modern Raspberry Pi OS (Bookworm) uses conditional sections in
+# config.txt — a globally placed dtoverlay can be ignored.
 if [ -f "$PICONFIG_PATH" ]
 then
   if isPi3
   then
     if ! grep -q 'dtoverlay=dwc2,dr_mode=peripheral' "$PICONFIG_PATH"
     then
-      # Remove plain dtoverlay=dwc2 if present (from a prior setup attempt)
       sed -i '/^dtoverlay=dwc2$/d' "$PICONFIG_PATH"
       echo -e "dtoverlay=dwc2,dr_mode=peripheral\n" >> "$PICONFIG_PATH"
       setup_progress "rebooting to apply dwc2 overlay change (peripheral mode for Pi 3)"
       reboot
       exit 0
     fi
+  elif isPi4
+  then
+    # Ensure [pi4] section exists with dtoverlay=dwc2.
+    # Remove any stale global dtoverlay=dwc2 (left over from base image)
+    # since Pi 4 needs it under the [pi4] conditional section.
+    pi4_needs_reboot=false
+    if grep -q '^\[pi4\]' "$PICONFIG_PATH"
+    then
+      # Section exists — check if dtoverlay=dwc2 is present within it
+      if ! sed -n '/^\[pi4\]/,/^\[/p' "$PICONFIG_PATH" | grep -q 'dtoverlay=dwc2'
+      then
+        sed -i '/^\[pi4\]/a dtoverlay=dwc2' "$PICONFIG_PATH"
+        pi4_needs_reboot=true
+      fi
+    else
+      # No [pi4] section — create one
+      if grep -q '^\[cm4\]' "$PICONFIG_PATH"
+      then
+        sed -i '/^\[cm4\]/i [pi4]\ndtoverlay=dwc2\n' "$PICONFIG_PATH"
+      else
+        printf '\n[pi4]\ndtoverlay=dwc2\n' >> "$PICONFIG_PATH"
+      fi
+      pi4_needs_reboot=true
+    fi
+    # Clean up global dtoverlay=dwc2 that is outside any section
+    sed -i '/^\[/,$!{/^dtoverlay=dwc2$/d}' "$PICONFIG_PATH"
+    if [ "$pi4_needs_reboot" = true ]
+    then
+      setup_progress "rebooting to apply dwc2 overlay change (Pi4 gadget mode)"
+      reboot
+      exit 0
+    fi
+  elif isPi5
+  then
+    # Ensure [pi5] section exists with dtoverlay=dwc2.
+    # Remove any stale global dtoverlay=dwc2 (left over from base image)
+    # since Pi 5 needs it under the [pi5] conditional section.
+    pi5_needs_reboot=false
+    if grep -q '^\[pi5\]' "$PICONFIG_PATH"
+    then
+      # Section exists — check if dtoverlay=dwc2 is present within it
+      if ! sed -n '/^\[pi5\]/,/^\[/p' "$PICONFIG_PATH" | grep -q 'dtoverlay=dwc2'
+      then
+        sed -i '/^\[pi5\]/a dtoverlay=dwc2' "$PICONFIG_PATH"
+        pi5_needs_reboot=true
+      fi
+    else
+      # No [pi5] section — create one
+      if grep -q '^\[cm5\]' "$PICONFIG_PATH"
+      then
+        sed -i '/^\[cm5\]/i [pi5]\ndtoverlay=dwc2\n' "$PICONFIG_PATH"
+      else
+        printf '\n[pi5]\ndtoverlay=dwc2\n' >> "$PICONFIG_PATH"
+      fi
+      pi5_needs_reboot=true
+    fi
+    # Clean up global dtoverlay=dwc2 that is outside any section
+    sed -i '/^\[/,$!{/^dtoverlay=dwc2$/d}' "$PICONFIG_PATH"
+    if [ "$pi5_needs_reboot" = true ]
+    then
+      setup_progress "rebooting to apply dwc2 overlay change (Pi5 gadget mode)"
+      reboot
+      exit 0
+    fi
   else
+    # Fallback for other boards (Pi Zero W, Pi Zero 2 W, etc.)
     if ! grep -q 'dtoverlay=dwc2' "$PICONFIG_PATH"
     then
       echo -e "dtoverlay=dwc2\n" >> "$PICONFIG_PATH"

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { ScrollText, Download, RefreshCw, ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -10,6 +10,260 @@ const logTabs = [
 
 const SCROLL_THRESHOLD = 60
 
+// ---------------------------------------------------------------------------
+// Log line parser
+//
+// Shell logs:  "Fri 20 Mar 21:27:22 PDT 2026: some message"
+// Go logs:     "Mon 21 Mar 14:30:45 UTC 2026: [drive-map] message"
+//
+// We extract the time portion (HH:MM:SS), an optional [tag], and the message,
+// then classify the level by keywords so we can color-code it.
+// ---------------------------------------------------------------------------
+
+type LogLevel = "error" | "warning" | "success" | "info" | "debug" | "default"
+
+interface ParsedLine {
+  date: string // e.g. "Mar 20"
+  time: string
+  tag: string
+  message: string
+  level: LogLevel
+  raw: string
+  fullTs: number // full timestamp in ms, used to detect clock jumps
+}
+
+// Matches: "Day DD Mon HH:MM:SS TZ YYYY:" at the start of a line
+// Captures: (DD) (Mon) (HH:MM:SS) (YYYY)
+const TIMESTAMP_RE =
+  /^[A-Z][a-z]{2}\s+(\d{1,2})\s+([A-Z][a-z]{2})\s+(\d{2}:\d{2}:\d{2})\s+\w+\s+(\d{4}):\s*/
+
+const MONTH_INDEX: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+}
+
+// Matches a [tag] prefix after the timestamp
+const TAG_RE = /^\[([^\]]+)\]\s*/
+
+function classifyLevel(message: string, tag: string): LogLevel {
+  // Away-mode lines are always amber/orange regardless of keywords
+  if (tag === "away-mode") return "warning"
+
+  const lower = message.toLowerCase()
+
+  // Errors — check first so "failed" always wins over softer matches
+  if (
+    lower.includes("error") ||
+    lower.includes("failed") ||
+    lower.includes("giving up") ||
+    lower.includes("unable to") ||
+    lower.includes("killed") ||
+    lower.includes("fatal") ||
+    lower.includes("connection dead")
+  )
+    return "error"
+
+  // Warnings
+  if (
+    lower.includes("warning") ||
+    lower.includes("warn") ||
+    lower.includes("retrying") ||
+    lower.includes("retry") ||
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("stale lock") ||
+    lower.includes("still running") ||
+    lower.includes("still processing") ||
+    lower.includes("unreachable") ||
+    lower.includes("skipping") ||
+    lower.includes("falling back") ||
+    lower.includes("network lost") ||
+    lower.includes("not mounted") ||
+    lower.includes("not supported") ||
+    lower.includes("not enabled") ||
+    lower.includes("incomplete") ||
+    lower.includes("discarding") ||
+    lower.includes("cycling wifi")
+  )
+    return "warning"
+
+  // Success
+  if (
+    lower.includes("nudge ok") ||
+    lower.includes("success") ||
+    lower.includes("enabled") ||
+    lower.includes("disabled") ||
+    lower.includes("restored") ||
+    lower.includes("complete") ||
+    lower.includes("finished") ||
+    lower.includes("started") ||
+    lower.includes("ready") ||
+    lower.includes("acquired") ||
+    lower.includes("mounted") ||
+    lower.includes("unmounted") ||
+    lower.includes("connected") ||
+    lower.includes("disconnected") ||
+    lower.includes("reachable") ||
+    lower.includes("reconnected") ||
+    lower.includes("took snapshot") ||
+    lower.includes("synced") ||
+    lower.includes("done") ||
+    lower.includes("up to date") ||
+    lower.includes("trim complete") ||
+    lower.includes("rebuilt") ||
+    lower.includes("removed") ||
+    lower.includes("time adjusted")
+  )
+    return "success"
+
+  // Info (tagged lines or informational keywords)
+  if (
+    tag ||
+    lower.includes("starting") ||
+    lower.includes("archiving") ||
+    lower.includes("processing") ||
+    lower.includes("syncing") ||
+    lower.includes("copying") ||
+    lower.includes("checking") ||
+    lower.includes("running") ||
+    lower.includes("disabling") ||
+    lower.includes("restoring") ||
+    lower.includes("queued") ||
+    lower.includes("waiting") ||
+    lower.includes("trimming") ||
+    lower.includes("cleaning") ||
+    lower.includes("making") ||
+    lower.includes("comparing") ||
+    lower.includes("detecting") ||
+    lower.includes("rebuilding") ||
+    lower.includes("taking snapshot") ||
+    lower.includes("ensuring") ||
+    lower.includes("tearing down") ||
+    lower.includes("temperature monitor") ||
+    lower.includes("command sent") ||
+    lower.includes("update available")
+  )
+    return "info"
+
+  return "default"
+}
+
+function parseLine(raw: string): ParsedLine {
+  let rest = raw
+  let date = ""
+  let time = ""
+  let tag = ""
+  let fullTs = 0
+
+  // Extract timestamp — captures (DD) (Mon) (HH:MM:SS) (YYYY)
+  const tsMatch = rest.match(TIMESTAMP_RE)
+  if (tsMatch) {
+    const day = parseInt(tsMatch[1], 10)
+    const month = MONTH_INDEX[tsMatch[2]] ?? 0
+    const year = parseInt(tsMatch[4], 10)
+    date = `${tsMatch[2]} ${tsMatch[1]}` // e.g. "Mar 20"
+    time = tsMatch[3]
+    const [h, m, s] = time.split(":").map(Number)
+    fullTs = new Date(year, month, day, h, m, s).getTime()
+    rest = rest.slice(tsMatch[0].length)
+  }
+
+  // Extract [tag]
+  const tagMatch = rest.match(TAG_RE)
+  if (tagMatch) {
+    tag = tagMatch[1]
+    rest = rest.slice(tagMatch[0].length)
+  }
+
+  const message = rest
+  const level = classifyLevel(message, tag)
+
+  return { date, time, tag, message, level, raw, fullTs }
+}
+
+// Colors for each level
+const levelColors: Record<LogLevel, { text: string; tag: string }> = {
+  error:   { text: "text-red-400",    tag: "text-red-500"    },
+  warning: { text: "text-amber-400",  tag: "text-amber-500"  },
+  success: { text: "text-emerald-400", tag: "text-emerald-500" },
+  info:    { text: "text-blue-400",   tag: "text-blue-500"   },
+  debug:   { text: "text-slate-500",  tag: "text-slate-600"  },
+  default: { text: "text-slate-300",  tag: "text-slate-500"  },
+}
+
+function LogLine({ parsed }: { parsed: ParsedLine }) {
+  const colors = levelColors[parsed.level]
+
+  return (
+    <span className="block">
+      {parsed.time && (
+        <span className="text-slate-500 select-none">{parsed.time}  </span>
+      )}
+      {parsed.tag && (
+        <span className={cn("font-semibold", colors.tag)}>
+          [{parsed.tag}]
+          {"  "}
+        </span>
+      )}
+      <span className={colors.text}>{parsed.message}</span>
+    </span>
+  )
+}
+
+function FormattedLog({ content }: { content: string }) {
+  const lines = useMemo(() => {
+    if (!content) return []
+    return content.split("\n").map((line) => parseLine(line))
+  }, [content])
+
+  // Track the last displayed date string so we only show a date header
+  // when the date actually changes (or at the start of a boot cycle).
+  let prevDate = ""
+  let inBootCycle = false // becomes true after we see the first entry
+
+  return (
+    <>
+      {lines.map((parsed, i) => {
+        if (parsed.raw.trim() === "") {
+          return <span key={i} className="block">{"\n"}</span>
+        }
+
+        // Boot cycle separator (====== lines from archiveloop)
+        if (parsed.raw.trim().startsWith("=====")) {
+          prevDate = "" // reset — new boot cycle
+          inBootCycle = false
+          return (
+            <span key={i} className="block border-b border-slate-700/40 my-3" />
+          )
+        }
+
+        // Show a date header when:
+        // 1. First timestamped entry in a boot cycle
+        // 2. The date string actually changes (new day or clock correction)
+        let dateSeparator = null
+        if (parsed.date) {
+          if (!inBootCycle || parsed.date !== prevDate) {
+            dateSeparator = (
+              <span className="block border-b border-slate-700/50 pb-1 pt-3 mb-1 text-xs font-medium text-slate-500 select-none">
+                — {parsed.date} —
+              </span>
+            )
+          }
+          prevDate = parsed.date
+          inBootCycle = true
+        }
+
+        return (
+          <span key={i}>
+            {dateSeparator}
+            <LogLine parsed={parsed} />
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 export default function Logs() {
   const [activeTab, setActiveTab] = useState("archiveloop")
   const [content, setContent] = useState<string>("Loading...")
@@ -19,6 +273,10 @@ export default function Logs() {
   const followRef = useRef(true)
 
   const activeLog = logTabs.find((t) => t.id === activeTab)!
+
+  // Format archiveloop and setup logs (same timestamp format).
+  // Diagnostics is a structured system-info dump — keep it raw.
+  const shouldFormat = activeTab === "archiveloop" || activeTab === "setup"
 
   const handleScroll = useCallback(() => {
     const el = preRef.current
@@ -171,7 +429,13 @@ export default function Logs() {
           onScroll={handleScroll}
           className="h-full overflow-auto p-4 font-mono text-xs leading-relaxed text-slate-300"
         >
-          {content || (
+          {content ? (
+            shouldFormat ? (
+              <FormattedLog content={content} />
+            ) : (
+              content
+            )
+          ) : (
             <span className="flex items-center gap-2 text-slate-600">
               <ScrollText className="h-4 w-4" />
               No log content

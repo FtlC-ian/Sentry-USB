@@ -6,6 +6,7 @@ import { MobileNav } from "./MobileNav"
 import { ConnectionBanner } from "./ConnectionBanner"
 import { cn } from "@/lib/utils"
 import { KeepAwakeProvider } from "@/hooks/useKeepAwake"
+import { AwayModeProvider } from "@/hooks/useAwayMode"
 import { ConnectionProvider } from "@/hooks/useConnectionStatus"
 
 export function AppShell() {
@@ -14,7 +15,8 @@ export function AppShell() {
 
   return (
     <ConnectionProvider>
-      <KeepAwakeProvider>
+      <AwayModeProvider>
+        <KeepAwakeProvider>
         <div className="flex h-full">
           {/* Desktop sidebar */}
           <div className="hidden md:block">
@@ -43,7 +45,7 @@ export function AppShell() {
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <span className="text-sm font-semibold text-slate-100">Sentry USB</span>
+              <span className="text-sm font-semibold text-slate-100" style={{ fontFamily: '"Sora", "DM Sans", system-ui, sans-serif' }}>Sentry USB</span>
             </div>
 
             <div className="p-4 pb-safe md:p-6">
@@ -52,7 +54,8 @@ export function AppShell() {
             </div>
           </main>
         </div>
-      </KeepAwakeProvider>
+        </KeepAwakeProvider>
+      </AwayModeProvider>
     </ConnectionProvider>
   )
 }

@@ -1,5 +1,10 @@
 const API_BASE = "/api"
 
+// Backend API base URL for resolving relative attachment/media URLs.
+// The Pi proxies API requests locally, but media assets are served directly
+// by the backend. Override via Vite env for staging/dev.
+export const BACKEND_BASE_URL = import.meta.env.VITE_SENTRY_API_URL || "https://api.sentry-six.com"
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -54,6 +59,8 @@ export interface DriveStatus {
   current?: number
   total?: number
   archiving?: boolean
+  process_current?: number
+  process_total?: number
 }
 
 export interface EventMeta {
@@ -68,6 +75,7 @@ export interface EventMeta {
 export interface ClipGroup {
   name: string
   clips: ClipEntry[]
+  hasMore?: boolean
 }
 
 export interface ClipEntry {
